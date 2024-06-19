@@ -1,0 +1,386 @@
+﻿@page "/chat-page"
+@inject AppState AppState
+@inject ISnackbar Snackbar
+@inject ChatService ChatSvc
+@implements IDisposable
+<h3>Chat Completion</h3>
+<MudGrid>
+    <MudItem xs="12" sm="7">
+        <MudPaper Class="pa-4">
+            <MudForm>
+                <MudTextField T="string" Lines="5" @bind-Text="@ChatSvc.systemMessage" Label="System Message" Required="true" RequiredError="System Message is required!" />
+                <MudSlider ValueLabel="true" @bind-Value="@ChatSvc.Temperature" Min="0" Max="2" Step="0.1">Temperature</MudSlider>
+                <MudSlider ValueLabel="true" @bind-Value="@ChatSvc.TopP" Min="0" Step="0.1" Max="1">Top-P</MudSlider>
+                <MudSlider ValueLabel="true" @bind-Value="@ChatSvc.MaxTokens" Min="1" Max="4096">Max Token</MudSlider>
+            </MudForm>
+        </MudPaper>
+        <MudPaper Class="pa-4 mt-4">
+            <MudButton Variant="Variant.Filled" Color="Color.Success" DisableElevation="true" OnClick="Reset" Class="mx-2">Reset</MudButton>
+            <MudButton Variant="Variant.Filled" Color="Color.Info" DisableElevation="true" OnClick="Load" Class="mx-2">Load</MudButton>
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" DisableElevation="true" OnClick="Save" Class="mx-2">Save</MudButton>
+        </MudPaper>
+    </MudItem>
+    <MudItem xs="12" sm="5">
+        <MudPaper Class="pa-4 mud-height-full">
+            <MudText Typo="Typo.subtitle2">@($"Info ({infos.Count})")</MudText>
+            @foreach (var error in infos)
+            {
+                <MudText Color="@Color.Info">@error</MudText>
+            }
+        </MudPaper>
+    </MudItem>
+</MudGrid>
+<MudGrid Justify="Justify.Center">
+    <MudItem id="answers" xs="12" Class="overflow-x-auto">
+        <MudStack Reverse="@IsReversed" Spacing="12">
+            @foreach (var item in Items)
+            {
+                <MudStack Justify="Justify.Center" AlignItems="AlignItems.Start" Spacing="4">
+                    <MudBadge Origin="Origin.TopLeft" Overlap="true" Color="Color.Secondary"
+                          Icon="@Icons.Material.Filled.QuestionMark" Class="d-flex align-self-end">
+                        <MudPaper Class="pa-6 d-flex flex-column" Elevation="3">
+                            <MudText Typo="Typo.body1" Align="Align.End">
+                                @item.Question
+                            </MudText>
+                            <MudText Typo="Typo.caption" Align="Align.End" Color="Color.Secondary">
+                                @($"Asked at {item.CreatedDate:h:mm:ss tt}")
+                            </MudText>
+                        </MudPaper>
+                    </MudBadge>
+                    <div class="ten-twelves">
+                        <MudBadge Origin="Origin.TopLeft" Overlap="true" Color="Color.Secondary"
+                              Icon="@Icons.Material.Filled.AutoAwesome">
+                            <MudGrid Justify="Justify.Center">
+                                <MudItem xs="12">
+                                    <MudTabs Elevation="2" Rounded="true" ApplyEffectsToContainer="true">
+                                        <MudTabPanel Icon="@Icons.Material.Filled.Quickreply" Text="Answer" ToolTip="Answer text">
+                                            <ChildContent>
+                                                <MudPaper Class="pa-6" Elevation="3">
+                                                    <MudText Typo="Typo.body1">
+                                                        @((MarkupString)HtmlHelper.ConvertToHtmlUsingConcatenation(item.Answer))
+                                                    </MudText>
+                                                    @if (item is { Sources.Count: > 0 })
+                                                    {
+                                                        <div class="pt-4">
+                                                            <MudText Typo="Typo.subtitle2" Class="pb-2">Citations:</MudText>
+                                                            @foreach (var citation in item.Sources)
+                                                            {
+                                                                var icon = citation.Source.EndsWith(".pdf")
+                                                                ? @Icons.Custom.FileFormats.FilePdf
+                                                                : null;
+                                                                <MudChip Variant="Variant.Text" Color="Color.Info"
+                                                             Icon="@icon" OnClick="@(_ => OnShowCitation(citation.Link))">
+                                                                    @citation.Source
+                                                                </MudChip>
+                                                            }
+                                                        </div>
+                                                    }
+                                                   
+                                                </MudPaper>
+                                            </ChildContent>
+                                        </MudTabPanel>
+                                    </MudTabs>
+                                </MudItem>
+                            </MudGrid>
+                        </MudBadge>
+                    </div>
+                </MudStack>
+            }
+        </MudStack>
+        @if (_isReceivingResponse)
+        {
+            <div class="ten-twelves mt-2">
+
+                <MudBadge Origin="Origin.TopLeft" Overlap="true" Color="Color.Secondary"
+                      Icon="@Icons.Material.Filled.Lightbulb" Class="full-width">
+                    <MudPaper Class="pa-6" Elevation="3">
+                        <Loading />
+                    </MudPaper>
+                </MudBadge>
+            </div>
+
+        }
+    </MudItem>
+    <MudItem xs="12" Class="rounded">
+        <MudGrid>
+            <MudItem xs="12" lg="10">
+                <MudBadge id="toggle-mic" Origin="Origin.TopRight" Color="Color.Primary"
+                          Overlap=true Dot=false Bordered=false Icon="@Icons.Material.Filled.Mic"
+                          Style="width:100%; cursor:pointer;">
+                    <MudTextField @bind-Value="@_userQuestion" Label="Type your question here.."
+                                  Variant="Variant.Outlined" Adornment="Adornment.End"
+                                  AdornmentIcon="@Icons.Material.Filled.ChatBubble"
+                                  AdornmentColor="Color.Secondary" AutoFocus="true"
+                                  Placeholder="Type your question here.." Lines="5"
+                                  IconSize="Size.Large"
+                                  HelperText="Type your question here.." Immediate="true"
+                                  OnKeyUp="@OnKeyUpAsync" Clearable="true"
+                                  Counter="16_384" MaxLength="16_384" />
+                </MudBadge>
+            </MudItem>
+            <MudItem xs="0" lg="2" Class="d-flex align-self-center">
+                <MudGrid Justify="Justify.Center">
+                    <MudItem xs="6" Class="pa-2">
+                        <MudFab Color="Color.Secondary" Size="Size.Large"
+                                StartIcon=@Icons.Material.Filled.Send 
+                                Label="Chat" aria-label="Ask question button."
+                                OnClick="@OnAskClickedAsync"
+                                Disabled=@(_isReceivingResponse || string.IsNullOrWhiteSpace(_userQuestion)) />
+                    </MudItem>
+                    @if (IsAbleToUpload)
+                    {
+                        <MudItem xs="3" Class="pa-2">
+                            <MudTooltip Arrow="true" Text="Upload File" Placement="Placement.Top">
+                            <MudFab Color="Color.Success" Size="Size.Medium"
+                                    StartIcon=@Icons.Material.Filled.Upload
+                                    aria-label="Upload Image."
+                                    OnClick="@PickMedia" Disabled=@_isReceivingResponse />
+                        </MudTooltip>
+                        </MudItem>
+                    }
+                    <MudItem xs="3" Class="pa-2">
+                        <MudTooltip Arrow="true" Text="Clear chat history" Placement="Placement.Top">
+                            <MudFab Color="Color.Primary" Size="Size.Medium"
+                                    StartIcon=@Icons.Material.Filled.DeleteForever
+                                    aria-label="Clear chat."
+                                    OnClick="@OnClearChat" Disabled=@_isReceivingResponse />
+                        </MudTooltip>
+                    </MudItem>
+                </MudGrid>
+            </MudItem>
+        </MudGrid>
+    </MudItem>
+    <MudScrollToTop Selector="#answers"
+                    VisibleCssClass="visible absolute"
+                    HiddenCssClass="invisible">
+        <MudFab Color="Color.Primary" IconSize="Size.Large" StartIcon="@Icons.Material.Filled.ArrowUpward" />
+    </MudScrollToTop>
+</MudGrid>
+@code {
+    
+    string FilePath { set; get; } = string.Empty;
+    bool IsAbleToUpload { set; get; } = true;
+    string Status = string.Empty;
+    bool IsLoading = false;
+    public List<RAGItem> Items { get; set; } = new();
+    bool IsReversed = false;
+    bool _isReceivingResponse = false;
+    string _userQuestion;
+    string _SelectedModel;
+    string SelectedModel
+    {
+        set
+        {
+            var reset = _SelectedModel != value;
+            _SelectedModel = value;            
+            if (reset) Reset();
+        }
+        get { return _SelectedModel; }
+    }
+    List<string> infos = new();
+    protected override async Task OnInitializedAsync()
+    {
+        SelectedModel = AppConstants.ModelOpenAIs.FirstOrDefault();
+        CmdHelper.ResultReceived += PrintOutput;
+    }
+    public async Task PickMedia()
+    {
+
+
+        try
+        {
+            int size = -1;
+            OpenFileDialog openFileDialog1 = new OpenFileDialog();
+            openFileDialog1.Title = "Open File";
+            openFileDialog1.Filter = "csv files (*.csv)|*.csv|pdf files (*.pdf)|*.pdf";
+            var result = openFileDialog1.ShowDialog(); // Show the dialog.
+            if (result ==   System.Windows.Forms.DialogResult.OK) // Test result.
+            {
+                string file = openFileDialog1.FileName;
+                try
+                {
+                    var ms = new MemoryStream(File.ReadAllBytes(file));
+                     FilePath = file;
+
+                }
+                catch (IOException)
+                {
+                }
+            }
+            else
+            {
+                infos.Add("Only support png, jpg, gif, bmp");
+            }
+            Console.WriteLine(size); // <-- Shows file size in debugging mode.
+            Console.WriteLine(result); // <-- For debugging use.
+
+
+
+
+        }
+        catch (Exception ex)
+        {
+            // The user canceled or something went wrong
+        }
+    }
+
+    async Task Save()
+    {
+        var Dir = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
+        var fName = Path.Combine(Dir, $"chat_{DateTime.Now.ToString("dd_MMM_yyyy_HH_mm_ss")}.json");
+        var data = new RagData() { Setting = new AISetting (){ MaxToken = ChatSvc.MaxTokens, Temperature = ChatSvc.Temperature, TopP = ChatSvc.TopP },  SystemMessage = ChatSvc.systemMessage, Items = Items, ModelId = SelectedModel };
+        var json = JsonConvert.SerializeObject(data, Formatting.Indented);
+        File.WriteAllText(fName,json);
+        Snackbar.Add($"File saved: {fName}", Severity.Success);
+    }
+    async Task Load()
+    {
+        var Dir = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
+        try
+        {
+            int size = -1;
+            OpenFileDialog openFileDialog1 = new OpenFileDialog();
+            openFileDialog1.InitialDirectory = Dir;
+            openFileDialog1.Title = "Open Json Data";
+            openFileDialog1.Filter = "json files (*.json)|*.json";
+            var result = openFileDialog1.ShowDialog(); // Show the dialog.
+            if (result ==   System.Windows.Forms.DialogResult.OK) // Test result.
+            {
+                string file = openFileDialog1.FileName;
+                try
+                {
+                    var text = File.ReadAllText(file);
+                    var data = JsonConvert.DeserializeObject<RagData>(text);
+                    if (data != null)
+                    {
+                        SelectedModel = data.ModelId;
+                        ChatSvc.systemMessage = data.SystemMessage;
+                        Items = data.Items;
+                        ChatSvc.Load(data);
+                        Snackbar.Add("File is loaded.", Severity.Info);
+                    }
+                    else
+                    {
+                        Snackbar.Add("File cannot be opened.", Severity.Warning);
+                    }
+                }
+                catch (IOException)
+                {
+                }
+            }
+            else
+            {
+                infos.Add("Only support json data");
+            }
+            Console.WriteLine(size); // <-- Shows file size in debugging mode.
+            Console.WriteLine(result); // <-- For debugging use.
+
+
+
+
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"File load error: {ex}", Severity.Error);
+            // The user canceled or something went wrong
+        }
+    }
+
+    async Task OnClearChat()
+    {
+        Items.Clear();
+    }
+    async Task OnShowCitation(string Link)
+    {
+
+    }
+
+    async void PrintOutput(object obj, CmdHelper.ConsoleOutArgs Message)
+    {
+        infos.Add($"{DateTime.Now} => {Message.Message}");
+        await InvokeAsync(StateHasChanged);
+    }
+
+    public void Dispose()
+    {
+        CmdHelper.ResultReceived -= PrintOutput;
+    }
+    async Task Reset()
+    {
+        ChatSvc.Reset();
+        Items.Clear();
+        FilePath = string.Empty;
+        infos.Add($"{DateTime.Now} - Chat is ready.");
+        Snackbar.Add($"{DateTime.Now} - Chat is ready.", Severity.Info);
+    }
+
+    private async Task OnKeyUpAsync(KeyboardEventArgs args)
+    {
+        if (args is { Key: "Enter", ShiftKey: false })
+        {
+            await OnAskClickedAsync();
+        }
+    }
+    async Task OnAskClickedAsync()
+    {
+        if (IsLoading) return;
+        if (!AppConstants.InternetOK)
+        {
+            Snackbar.Add("Please check internet connection.", Severity.Error);
+            return;
+
+        }
+        if (string.IsNullOrEmpty(_userQuestion))
+        {
+            Snackbar.Add("Please type a message first.", Severity.Warning);
+            return;
+        }
+        _isReceivingResponse = true;
+        try
+        {
+            var answer = string.Empty;
+            if (!string.IsNullOrEmpty(FilePath))
+            {
+                //upload
+                var output = await ChatSvc.Chat(_userQuestion, FilePath);
+                answer = output.Message;
+            }
+            else
+            {
+                var output = await ChatSvc.Chat(_userQuestion);
+                answer = output.Message;
+            }
+            
+            Console.WriteLine("Sources:\n");
+            var res = answer;
+
+         
+            var newItem = new RAGItem() { Answer = res, CreatedDate = DateTime.Now, Question = _userQuestion, ImageUrl = FilePath };
+            /*
+            //only for debug
+            foreach (var x in answer.RelevantSources)
+            {
+                newItem.Sources.Add(new SourceItem() { Link = x.Link, Source = x.SourceName });
+                Console.WriteLine($"  - {x.SourceName}  - {x.Link} [{x.Partitions.First().LastUpdate:D}]");
+            }*/
+            //Console.WriteLine($"Question: {_userQuestion}\n\nAnswer: {answer}");
+            Items.Add(newItem);
+            _userQuestion = string.Empty;
+            FilePath = string.Empty;
+            
+
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add("error answer question:" + ex, Severity.Warning);
+            Console.WriteLine( "error answer question:"+ex);
+
+        }
+        finally
+        {
+            _isReceivingResponse = false;
+        }
+    }
+
+  
+}
